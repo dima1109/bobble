@@ -1,0 +1,23 @@
+{
+  "name": "bobble",
+  "version": "0.1.0",
+  "description": "\"All about bobbleheads\"",
+  "main": "server.js",
+  "dependencies": {
+    "express": "^4.13.3",
+    "logfmt": "^1.2.0",
+    "mongodb": "^2.0.48",
+    "npm": "^3.4.0",
+    "request": "^2.66.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": "5.0.0"
+  },
+  "author": "",
+  "license": "ISC"
+}

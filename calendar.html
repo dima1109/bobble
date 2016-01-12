@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<link rel="stylesheet" href="styles/main.css">
+		<link rel="stylesheet" href="styles/calendar.css">
+		<link rel="stylesheet" href="styles/navbar.css">
+		<script type='text/javascript' src='d3.v3.min.js'></script>
+		<script type='text/javascript' src='jquery-2.0.3.min.js'></script>
+		<script>
+			
+			var currentTeamFilter = null;
+			
+			// Load the list of teams
+			d3.json('/teams', function(error, teamList) {
+				
+				// Sort teams alphabetically
+				teamList.sort(function(one, another) {
+					if (one['Abbreviation'] > another['Abbreviation']) {
+						return 1;
+					} else {
+						return -1;
+					}  
+					return 0;
+				});
+				
+				d3.select('#topLogoContainer')
+				.selectAll('div')
+				.data(teamList)
+				.enter()
+				.append('div')
+				.attr('class', 'topTeamLogo')
+				.style('background-image', function(d) {
+					return 'url(logos/' + d['Abbreviation'] + '.svg)';
+				})
+				.select(function(d) {
+					this.__data__ = d;
+					return this;
+				});
+				
+			});
+		</script>
+		
+		
+		
+		<script>
+			var bobbleData, teamBobbleData, detailsRow;
+			
+			var monthNames = [ "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" ];
+			
+			// Load all bobblehead data. Once loaded, it will be an array of teams with Promotions sub-objects.
+			// Reshape the array to be an array of bobbleheads/Promotions instead.
+			d3.json('/bobbleheads', function(error, teamData) {
+				bobbleData = new Array();
+				teamBobbleData = new Object();
+				
+				// Isolate the promotions from each team and store them in a flat array
+				teamData.forEach(function(currTeamData) {
+					var currPromotions = currTeamData['Promotions'];
+					if (currPromotions.length > 0) {
+						currPromotions.forEach(function(currPromo) {
+							var promoWithDetails = new Object();				  
+							promoWithDetails['Promotion'] = currPromo;
+							promoWithDetails['Promotion']['Team'] = currTeamData['Abbreviation']
+							promoWithDetails['Promotion']['Time'] = new Date(currPromo['Time']);
+							promoWithDetails['Time'] = new Date(promoWithDetails['Promotion']['Time'].getFullYear(),
+																promoWithDetails['Promotion']['Time'].getMonth(),
+																promoWithDetails['Promotion']['Time'].getDate());
+							
+							bobbleData.push(promoWithDetails);
+							teamBobbleData[currTeamData['Abbreviation']] = currTeamData;
+						});
+					}
+				});
+				
+				// Sort the promotions array by time
+				bobbleData.sort(function(one, another) {
+					if (one['Promotion']['Time'] > another['Promotion']['Time']) {
+						return 1;
+					} else {
+						return -1;
+					}  
+					return 0;
+				});
+				
+				// Consolidate the promotions occurring on the same day in the same array element
+				iBobble = 0;
+				while (iBobble < bobbleData.length) {
+					if (iBobble > 0) {
+						if (bobbleData[iBobble-1]['Time'] - bobbleData[iBobble]['Time'] == 0) {
+							if (!(bobbleData[iBobble-1]['Promotion'] instanceof Array)) {
+								var currPromo = bobbleData[iBobble-1]['Promotion'];
+								delete bobbleData[iBobble-1]['Promotion']
+								
+								bobbleData[iBobble-1]['Promotion'] = [currPromo];
+							}
+							bobbleData[iBobble-1]['Promotion'].push(bobbleData[iBobble]['Promotion']);
+							bobbleData.splice(iBobble,1);
+							continue;
+						}
+					}
+					iBobble++;
+				}
+				
+				// Convert each Promotion entry to an array of entries for easier processing later. 
+				// This way, every Promotion element is an array.
+				for (var iDay = 0; iDay < bobbleData.length; iDay++) {
+					if (!(bobbleData[iDay]['Promotion'] instanceof Array)) {
+						bobbleData[iDay]['Promotion'] = new Array(bobbleData[iDay]['Promotion']);
+					}
+				}
+				
+				populateTable();
+			});
+			
+			var anchorDate = new Date();
+			
+			// Temporary hack until the database update is fully implemented; for now, the DB contains the full 2014 data set
+			anchorDate.setFullYear(2014);
+			
+			// If the date is outside the baseball season month range, default it to March
+			if (anchorDate.getMonth() < 2 || anchorDate.getMonth() > 8) {
+				anchorDate.setMonth(2);
+			}
+			
+			var firstDateOfMonth;
+			var firstDateOnCalendar;
+			
+			// This function is calles when a month button is clicked, as well as on startup
+			var setMonth = function(monthNum) {
+				anchorDate = new Date(anchorDate.getFullYear(), monthNum, anchorDate.getDate());
+				clearTable(); 
+				generateTable();
+				populateTable();
+			};
+			
+			// Generate the calendar table
+			var generateTable = function() {
+				var table = d3.select('#calendarTable'),
+					tbody = table.select('tbody');
+				
+				var today = new Date();
+				
+				// Temporary hack until the database update is fully implemented; for now, the DB contains the full 2014 data set
+				today.setFullYear(2014);
+				
+				firstDateOfMonth = new Date(anchorDate.getFullYear(), anchorDate.getMonth());
+				firstDateOnCalendar = new Date(anchorDate.getFullYear(), 
+											   anchorDate.getMonth(), 
+											   firstDateOfMonth.getDate() - firstDateOfMonth.getDay());
+				
+				// Generate the month button grid and highlight the current month
+				monthContainer = d3.select('#monthButtonContainer');
+				monthContainer.selectAll('div')
+				.data(monthNames.slice(2, 9))
+				.enter()
+				.append('div')
+				.attr('class', 'monthButton')
+				.text(function(d) { return d; })
+				.style('background-color', function(d,i) { return anchorDate.getMonth() == (i+2) ? '#ffdeb8' : '#ffa540'; })
+				.on('click', function(d,i) { setMonth(i+2); });
+				
+				var weeks = new Array();
+				weeks.push(new Array());
+				var iWeek = 0;
+				
+				// Build an array with information for each day (whether it is in the current/non-current month, on a weekend, etc.)
+				var dayInfo = new Array();
+				for (var iDay = 0; iDay < 42; iDay++) {
+					currDate = new Date(firstDateOnCalendar.getFullYear(),
+										firstDateOnCalendar.getMonth(),
+										firstDateOnCalendar.getDate() + iDay);
+					
+					weeks[iWeek].push(currDate);
+					if (((iDay+1) % 7 == 0) & (iDay < 35)) {
+						weeks.push(new Array());
+						iWeek++;
+					}
+				}
+				
+				// Color the table cells: darker gray for other months, light grey for weekends, green for today
+				tbody.selectAll('tr')
+				.data(weeks)
+				.enter()
+				.append('tr')
+				.attr('id', function(week,i) { return 'week' + (i+1); })
+				.selectAll('td')
+				.data(function(day) { return day })
+				.enter()
+				.append('td')
+				.attr('id', function(d,i) { return 'day' + (i+1); })
+				.style('background-color', function(day) { 
+					
+					// TODO Replace hard-coded colors with CSS classes
+					
+					// Highlight today's date
+					if (day.getMonth() == today.getMonth() & day.getDate() == today.getDate()) {
+						return '#aee5fd'
+					}
+					
+					// Highlight days not in current month
+					if (day.getMonth() != anchorDate.getMonth()) {
+						return '#ffa540'
+					}
+					
+					// Highlight weekend days
+					return ((day.getDay() == 0 | day.getDay() == 6) ? '#ffbd73' : '#ffdeb8');
+				})
+				.append('div')
+				.attr('class', 'cellContent')
+				.append('div')
+				.attr('class', 'dateLabel')
+				.text(function(day) {
+					return day.getDate()
+				});
+			};
+			
+			var populateTable = function() {
+				
+				if (bobbleData == undefined) {
+					return;
+				}
+				
+				var table = d3.select('#calendarTable'),
+					tbody = table.select('tbody');
+				
+				// Reset the iBobble counter to make sure it captures the current month
+				var iBobble = 0;
+				while (bobbleData[iBobble]['Time'] < firstDateOnCalendar) {
+					iBobble++;
+				}
+				
+				// Isolate all dates with promotions and store them in the allPromoCells variable for easy re-use later.
+				// This also binds the promotion data object to each table cell so it can be retrieved later by
+				// downstream functions.
+				allPromoCells = tbody.selectAll('td')
+				.select(function(d) { 
+					if (iBobble > (bobbleData.length-1))
+					{
+						return null;
+					}
+					
+					bobbleDate = bobbleData[iBobble]['Time'];
+					
+					if (d.getMonth() == bobbleDate.getMonth() & 
+						d.getDate() == bobbleDate.getDate())
+					{
+						var currBobbleData = bobbleData[iBobble]['Promotion'].slice();
+						
+						for (var iPromo = currBobbleData.length-1; iPromo >= 0; iPromo--) {
+							if ((currentTeamFilter != null) & (currentTeamFilter != currBobbleData[iPromo]['Team'])) {
+								currBobbleData.splice(iPromo, 1);
+							}
+						}
+						
+						if (currBobbleData.length == 0) {
+							iBobble++;
+							return null;
+						} else {
+							this.__data__ = currBobbleData;
+							iBobble++;
+							return this;
+						}
+					} else {
+						return null;
+					}
+				});
+				
+				// Fill in the bobblehead information (team, name, presence of a photo, etc.) and set up mouse action callbacks
+				var a = allPromoCells.selectAll('.cellContent')
+				.each(function(d,i) {
+					var container = d3.select(this);
+					container.append('div')
+					.attr('class', 'logoContainer')
+					logoContainer = container.select('.logoContainer');
+					
+					var promoData = new Object(this.parentNode.__data__);
+					
+					// Populate the team logo elements with the appropriate logos
+					logoContainer.selectAll('.promoTeamLogo')
+					.data(promoData)
+					.enter()
+					.append('div')
+					.attr('class', function(d) {
+						return 'promoTeamLogo';
+					})
+					.style('background-image', function(d) {
+						return 'url(logos/' + d['Team'] + '.svg)';
+					})
+					.style('width', function(d) {
+						return '50px';
+					})
+					.select(function(d) {
+						this.__data__ = d;
+						return this;
+					})
+					.on('mouseover', function(d) { 
+						// When there is more that one promo in a day, show the name of each on mouseover 
+						// of the corresponding team logo
+						var numPromotions = this.parentNode.parentNode.parentNode.__data__.length;
+						if (numPromotions == 1) {
+							return;
+						} else {
+							var promoLabel = this.parentNode.parentNode.getElementsByClassName('promoLabel')[0];
+							promoLabel.textContent = d['Description'];
+						}
+					})
+					.on('mouseout', function(d) { 
+						var numPromotions = this.parentNode.parentNode.parentNode.__data__.length;
+						if (numPromotions == 1) { 
+							return;
+						} else {
+							var promoLabel = this.parentNode.parentNode.getElementsByClassName('promoLabel')[0]; 
+							promoLabel.textContent = numPromotions + ' bobbleheads';
+						}
+					})
+					.on('click', function(d) { 
+						// When a team logo is clicked, display a block between the current and the next table row
+						// with additional information. 
+						// TODO This is where ticket and eBay data summaries should go.
+						
+						var calendarTable = document.getElementById('calendarTable');
+						
+						if (detailsRow && detailsRow.__data__['Time'] != d['Time']) {
+							calendarTable.deleteRow(detailsRow.rowIndex);
+							detailsRow = undefined;
+						}
+						
+						if (!detailsRow) {
+							var currentCell = this.parentNode.parentNode.parentNode;
+							var currentRow = currentCell.parentNode;
+							var currRowIdx = currentRow.rowIndex;
+							
+							detailsRow = calendarTable.insertRow(currRowIdx+1);
+							detailsRow.setAttribute('id', 'detailsRow');
+							var newCell = detailsRow.insertCell(0);
+							newCell.setAttribute('id', 'detailsRowCell');
+							newCell.setAttribute('colspan', 7);
+							
+        					$("#detailsRowCell").load("bobble_details.html", function() {
+								// Bobblehead image, if available
+								var URLPrefix = 'http://mlb.mlb.com';
+								var imgURL = d['ImageURL'].indexOf('http') == -1 ? URLPrefix+d['ImageURL'] : d['ImageURL'];
+								if (d['ImageURL']) {
+									$('#bobbleDetailsPhoto').attr('src', imgURL);
+								} else {
+									$('#bobbleDetailsPhoto').attr('src', 'bobble-image-placeholder.png');
+								}
+								
+								// Details and the number of bobbleheads given out
+								$('#bobbleDetailsLabel').text(d['Description']);
+								
+								var distributionText = d['Distribution'] == '' ? 'Quantity unknown' : d['Distribution'];
+								$('#bobbleDistributionLabel').text(distributionText);
+								
+								var bobbleDateTime = d['Time'];
+								$('#bobbleDateTimeLabel').text(bobbleDateTime.toLocaleString());
+								
+								// Team logos
+								var opponentBgLogoLocation = 'url(logos/' + d['Opponent'] + '.svg)';
+								var teamBgLogoLocation = 'url(logos/' + d['Team'] + '.svg)';
+								$('#bobbleOpponentLogo').css('background-image', opponentBgLogoLocation);
+								$('#bobbleTeamLogo').css('background-image', teamBgLogoLocation);
+								
+								// Close button
+								$('#closeDetails').click(function() {
+									calendarTable.deleteRow(detailsRow.rowIndex);
+									detailsRow = undefined;
+								});
+							});
+							
+							detailsRow.__data__ = d;
+						} else {
+							calendarTable.deleteRow(detailsRow.rowIndex);
+							detailsRow = undefined;
+						}
+					});
+					
+					// Add a camera icon to each logo that has a bobblehead photo available
+					container.selectAll('.promoTeamLogo')
+					.select(function(d) {
+						if (d['ImageURL']) {
+							return this;
+						} else {
+							return null;
+						}
+					})
+					.each(function(d,i) {
+						d3.select(this)
+						.append('div')
+						.attr('class', 'cameraIcon');
+					});
+					
+					container.append('div')
+					.attr('class', 'promoLabel')
+					.text(function(d) {
+						var allPromos = this.parentNode.parentNode.__data__;
+						return allPromos.length > 1 ? allPromos.length + ' bobbleheads' : allPromos[0]['Description'];
+					});
+				});
+			};
+		</script>
+		
+		<script>
+			$(document).ready(function() { generateTable(new Date()); populateTable(); });
+			
+			var clearTable = function() {
+				d3.selectAll('tr')
+				.data([])
+				.exit()
+				.remove();
+				
+				d3.selectAll('.monthButton')
+				.data([])
+				.exit()
+				.remove();
+			}
+		</script>
+	</head>
+	<body>
+		<div id='contentContainer'>
+			<div id='monthButtonContainer'></div>
+			<table id='calendarTable'>
+				<tbody></tbody>
+			</table>
+		</div>
+	</body>
+</html>
+
+
+
+
+
+
+
